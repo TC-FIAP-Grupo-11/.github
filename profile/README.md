@@ -53,46 +53,59 @@ flowchart TD
 
 ### Fluxo 1 — Cadastro de Usuário
 
-```
-Cliente
-  │
-  ├─► POST /users/api/users/register  → FCG.Api.Users → AWS Cognito (cria usuário)
-  │
-  ├─► POST /users/api/users/confirm   → FCG.Api.Users
-  │                                        │
-  │                                        └─► publica UserCreatedEvent → RabbitMQ
-  │                                                  │
-  │                                                  └─► FCG.Api.Notifications
-  │                                                            └─► invoca FCG.Lambda.Notification
-  │                                                                  └─► loga e-mail de boas-vindas
-  │
-  └─► POST /users/api/auth/login      → FCG.Api.Users → AWS Cognito → retorna JWT
+```mermaid
+sequenceDiagram
+    actor Cliente
+    participant Users as FCG.Api.Users
+    participant Cognito as AWS Cognito
+    participant RMQ as RabbitMQ
+    participant Notifications as FCG.Api.Notifications
+    participant LNotif as FCG.Lambda.Notification
+
+    Cliente->>Users: POST /users/register
+    Users->>Cognito: cria usuário
+    Cognito-->>Users: ok
+
+    Cliente->>Users: POST /users/confirm
+    Users->>RMQ: publica UserCreatedEvent
+    RMQ->>Notifications: UserCreatedEvent
+    Notifications->>LNotif: invoca
+    LNotif-->>Notifications: loga e-mail de boas-vindas
+
+    Cliente->>Users: POST /auth/login
+    Users->>Cognito: autentica
+    Cognito-->>Users: JWT
+    Users-->>Cliente: JWT
 ```
 
 ### Fluxo 2 — Compra de Jogo
 
-```
-Cliente (com JWT)
-  │
-  ├─► POST /catalog/api/games/{id}/purchase  → FCG.Api.Catalog
-  │                                               │
-  │                                               ├─► salva UserGame (FCG_Catalog DB)
-  │                                               └─► publica OrderPlacedEvent → RabbitMQ
-  │
-  │   RabbitMQ
-  │     └─► FCG.Api.Payments (OrderPlacedEventConsumer)
-  │               │
-  │               ├─► invoca FCG.Lambda.Payment
-  │               │         └─► simula pagamento → retorna resultado
-  │               │
-  │               ├─► publica PaymentProcessedEvent → RabbitMQ
-  │               │         └─► FCG.Api.Catalog (PaymentProcessedEventConsumer)
-  │               │                   └─► confirma compra na biblioteca do usuário
-  │               │
-  │               └─► invoca FCG.Lambda.Notification
-  │                         └─► loga confirmação/falha de compra
-  │
-  └─► GET /catalog/api/users/{id}/library  → FCG.Api.Catalog → retorna jogos do usuário
+```mermaid
+sequenceDiagram
+    actor Cliente
+    participant Catalog as FCG.Api.Catalog
+    participant RMQ as RabbitMQ
+    participant Payments as FCG.Api.Payments
+    participant LPay as FCG.Lambda.Payment
+    participant LNotif as FCG.Lambda.Notification
+
+    Cliente->>Catalog: POST /games/{id}/purchase
+    Catalog->>Catalog: salva UserGame (DB)
+    Catalog->>RMQ: publica OrderPlacedEvent
+
+    RMQ->>Payments: OrderPlacedEvent
+    Payments->>LPay: invoca
+    LPay-->>Payments: resultado do pagamento
+
+    Payments->>RMQ: publica PaymentProcessedEvent
+    RMQ->>Catalog: PaymentProcessedEvent
+    Catalog->>Catalog: confirma compra na biblioteca
+
+    Payments->>LNotif: invoca
+    LNotif-->>Payments: loga confirmação/falha de compra
+
+    Cliente->>Catalog: GET /users/{id}/library
+    Catalog-->>Cliente: lista de jogos
 ```
 
 ### Resumo dos Eventos

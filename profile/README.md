@@ -7,7 +7,6 @@ flowchart TD
     Client([Internet / Cliente]) -->|HTTPS| APIGW
 
     subgraph APIGW[AWS API Gateway - HTTP API]
-        Cognito[JWT Authorizer\nAWS Cognito]
     end
 
     subgraph EKS[AWS EKS Cluster]
@@ -20,8 +19,8 @@ flowchart TD
     end
 
     subgraph Lambdas[AWS Lambda]
-        LPay[fcg-payment-processor\nFCG.Lambda.Payment]
-        LNotif[fcg-notification-sender\nFCG.Lambda.Notification]
+        LPay[FCG.Lambda.Payment]
+        LNotif[FCG.Lambda.Notification]
     end
 
     APIGW -->|VPC Link / NLB| Users
@@ -33,14 +32,13 @@ flowchart TD
     Catalog -->|OrderPlacedEvent| RMQ
 
     RMQ -->|OrderPlacedEvent| Payments
-    RMQ -->|UserCreatedEvent| Notifications
+
+    Payments -->|invoca| LPay
+    LPay -->|resultado| Payments
+    Payments -->|PaymentProcessedEvent| RMQ
+    Payments -->|invoca| LNotif
+
     RMQ -->|PaymentProcessedEvent| Catalog
-    RMQ -->|PaymentProcessedEvent| Notifications
-
-    Payments -->|invoca síncrono| LPay
-    LPay -->|PaymentProcessedEvent| RMQ
-
-    Notifications -->|invoca fire-and-forget| LNotif
 
     Users --- SQL
     Catalog --- SQL
@@ -55,19 +53,13 @@ flowchart TD
 ```
 Cliente
   │
-  ├─► POST /users/api/users/register    → FCG.Api.Users → AWS Cognito (cria usuário)
+  ├─► POST /users/api/users/register  → FCG.Api.Users → AWS Cognito (cria usuário)
   │
-  ├─► POST /users/api/users/confirm     → FCG.Api.Users
-  │                                          │
-  │                                          └─► publica UserCreatedEvent → RabbitMQ
-  │                                                    │
-  │                                                    └─► FCG.Api.Notifications
-  │                                                          (UserCreatedEventConsumer)
-  │                                                          └─► invoca FCG.Lambda.Notification
-  │                                                                (EventType: "UserCreated")
-  │                                                                → loga e-mail de boas-vindas
+  ├─► POST /users/api/users/confirm   → FCG.Api.Users
+  │                                        │
+  │                                        └─► publica UserCreatedEvent → RabbitMQ
   │
-  └─► POST /users/api/auth/login        → FCG.Api.Users → AWS Cognito → retorna JWT
+  └─► POST /users/api/auth/login      → FCG.Api.Users → AWS Cognito → retorna JWT
 ```
 
 ### Fluxo 2 — Compra de Jogo
@@ -83,35 +75,30 @@ Cliente (com JWT)
   │   RabbitMQ
   │     └─► FCG.Api.Payments (OrderPlacedEventConsumer)
   │               │
-  │               └─► invoca FCG.Lambda.Payment (síncrono / RequestResponse)
-  │                         │
-  │                         ├─► simula pagamento
-  │                         └─► retorna PaymentResult (Success/Failure)
-  │
-  │         FCG.Api.Payments publica PaymentProcessedEvent → RabbitMQ
-  │                   │
-  │                   ├─► FCG.Api.Catalog (PaymentProcessedEventConsumer)
-  │                   │         └─► confirma compra na biblioteca do usuário
-  │                   │
-  │                   └─► FCG.Api.Notifications (PaymentProcessedEventConsumer)
-  │                               └─► invoca FCG.Lambda.Notification
-  │                                         (EventType: "PaymentProcessed")
-  │                                         → loga confirmação/falha de compra
+  │               ├─► invoca FCG.Lambda.Payment
+  │               │         └─► simula pagamento → retorna resultado
+  │               │
+  │               ├─► publica PaymentProcessedEvent → RabbitMQ
+  │               │         └─► FCG.Api.Catalog (PaymentProcessedEventConsumer)
+  │               │                   └─► confirma compra na biblioteca do usuário
+  │               │
+  │               └─► invoca FCG.Lambda.Notification
+  │                         └─► loga confirmação/falha de compra
   │
   └─► GET /catalog/api/users/{id}/library  → FCG.Api.Catalog → retorna jogos do usuário
 ```
 
 ### Resumo dos Eventos
 
-| Evento                  | Publicado por        | Consumido por                                      |
-|-------------------------|----------------------|----------------------------------------------------|
-| `UserCreatedEvent`      | FCG.Api.Users        | FCG.Api.Notifications                              |
-| `OrderPlacedEvent`      | FCG.Api.Catalog      | FCG.Api.Payments                                   |
-| `PaymentProcessedEvent` | FCG.Api.Payments     | FCG.Api.Catalog, FCG.Api.Notifications             |
+| Evento                  | Publicado por        | Consumido por           |
+|-------------------------|----------------------|-------------------------|
+| `UserCreatedEvent`      | FCG.Api.Users        | —                       |
+| `OrderPlacedEvent`      | FCG.Api.Catalog      | FCG.Api.Payments        |
+| `PaymentProcessedEvent` | FCG.Api.Payments     | FCG.Api.Catalog         |
 
-### Invocações diretas (AWS Lambda SDK)
+### Invocações de Lambda
 
-| Chamador                | Lambda invocada             | Tipo                       |
-|-------------------------|-----------------------------|----------------------------|
-| FCG.Api.Payments        | FCG.Lambda.Payment          | Síncrono (RequestResponse) |
-| FCG.Api.Notifications   | FCG.Lambda.Notification     | Fire-and-forget (Event)    |
+| Chamador              | Lambda invocada          |
+|-----------------------|--------------------------|
+| FCG.Api.Payments      | FCG.Lambda.Payment       |
+| FCG.Api.Payments      | FCG.Lambda.Notification  |

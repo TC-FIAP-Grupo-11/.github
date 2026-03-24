@@ -2,97 +2,48 @@
 
 ## Desenho da Arquitetura
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        INTERNET / CLIENTE                            │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ HTTPS
-                              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                   AWS API GATEWAY (HTTP API)                         │
-│                                                                      │
-│  JWT Authorizer ──► AWS Cognito User Pool                           │
-│                                                                      │
-│  /users/{proxy+}         ──► VPC Link ──► NLB ──► FCG.Api.Users    │
-│  /catalog/{proxy+}       ──► VPC Link ──► NLB ──► FCG.Api.Catalog  │
-│  /payments/{proxy+}      ──► VPC Link ──► NLB ──► FCG.Api.Payments │
-│  /notifications/{proxy+} ──► VPC Link ──► NLB ──► FCG.Api.Notif.  │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │ VPC Link (interno)
-                              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                         AWS EKS CLUSTER                              │
-│                                                                      │
-│  ┌─────────────────┐         ┌──────────────────┐                  │
-│  │  FCG.Api.Users  │         │  FCG.Api.Catalog  │                  │
-│  │                 │         │                   │                  │
-│  │  POST /confirm  │         │  POST /purchase   │                  │
-│  │  publica ───────────────► │  publica ─────────────────────────┐ │
-│  │  UserCreated    │         │  OrderPlacedEvent │               │ │
-│  └─────────────────┘         └──────────────────┘               │ │
-│                                                                   │ │
-│  ┌────────────────────────────────────────────────────────────┐  │ │
-│  │                         RabbitMQ                           │  │ │
-│  │                                                            │◄─┘ │
-│  │  UserCreatedEvent ──────────────────────────────────────┐  │    │
-│  │  OrderPlacedEvent ───────────────────────────────────┐  │  │    │
-│  │  PaymentProcessedEvent ◄──────────────────────────┐  │  │  │    │
-│  └───────────────────────────────────────────────────│──│──│──┘    │
-│                                                       │  │  │       │
-│                             ┌─────────────────────────┘  │  │       │
-│                             │  ┌──────────────────────────┘  │       │
-│                             │  │                             │       │
-│                             ▼  ▼                             │       │
-│                   ┌──────────────────────┐                   │       │
-│                   │  FCG.Api.Payments    │                   │       │
-│                   │  OrderPlaced         │                   │       │
-│                   │  EventConsumer       │                   │       │
-│                   └──────────┬───────────┘                   │       │
-│                              │ invoca (síncrono)             │       │
-│                              ▼                               │       │
-│                   ┌──────────────────────┐                   │       │
-│                   │  FCG.Lambda.Payment  │ (AWS Lambda)      │       │
-│                   │  simula pagamento    │                   │       │
-│                   │  retorna resultado   │                   │       │
-│                   └──────────┬───────────┘                   │       │
-│                              │ publica PaymentProcessed ─────┘       │
-│                                                                       │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │                   FCG.Api.Notifications                        │  │
-│  │   UserCreatedEventConsumer   PaymentProcessedEventConsumer     │  │
-│  └──────────┬──────────────────────────────┬──────────────────────┘  │
-│             │ invoca                        │ invoca                  │
-│             ▼                              ▼                         │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │              FCG.Lambda.Notification  (AWS Lambda)           │    │
-│  │   "UserCreated"       → loga e-mail de boas-vindas           │    │
-│  │   "PaymentProcessed"  → loga confirmação/falha de compra     │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  FCG.Api.Catalog também consome PaymentProcessedEvent                │
-│  → confirma compra e atualiza biblioteca do usuário                  │
-└───────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Client([Internet / Cliente]) -->|HTTPS| APIGW
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                          AWS SERVICES                                │
-│                                                                      │
-│  AWS Cognito     │  AWS ECR            │  AWS CloudWatch             │
-│  (JWT Auth)      │  (imagens Docker)   │  (logs Lambda + X-Ray)     │
-│                                                                      │
-│  AWS Lambda                                                          │
-│    fcg-payment-processor    — processa OrderPlacedEvent              │
-│    fcg-notification-sender  — envia notificações (UserCreated /      │
-│                               PaymentProcessed)                      │
-└──────────────────────────────────────────────────────────────────────┘
+    subgraph APIGW[AWS API Gateway - HTTP API]
+        Cognito[JWT Authorizer\nAWS Cognito]
+    end
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                       SQL SERVER (pod EKS)                           │
-│                                                                      │
-│  FCG_Users   → Users          (+ UsersHistory — Temporal Table)     │
-│  FCG_Catalog → Games          (+ GamesHistory — Temporal Table)     │
-│              → UserGames      (+ UserGamesHistory — Temporal Table) │
-│              → Promotions     (+ PromotionsHistory — Temporal Table)│
-└──────────────────────────────────────────────────────────────────────┘
+    subgraph EKS[AWS EKS Cluster]
+        Users[FCG.Api.Users]
+        Catalog[FCG.Api.Catalog]
+        Payments[FCG.Api.Payments]
+        Notifications[FCG.Api.Notifications]
+        RMQ[(RabbitMQ)]
+        SQL[(SQL Server\nFCG_Users / FCG_Catalog)]
+    end
+
+    subgraph Lambdas[AWS Lambda]
+        LPay[fcg-payment-processor\nFCG.Lambda.Payment]
+        LNotif[fcg-notification-sender\nFCG.Lambda.Notification]
+    end
+
+    APIGW -->|VPC Link / NLB| Users
+    APIGW -->|VPC Link / NLB| Catalog
+    APIGW -->|VPC Link / NLB| Payments
+    APIGW -->|VPC Link / NLB| Notifications
+
+    Users -->|UserCreatedEvent| RMQ
+    Catalog -->|OrderPlacedEvent| RMQ
+
+    RMQ -->|OrderPlacedEvent| Payments
+    RMQ -->|UserCreatedEvent| Notifications
+    RMQ -->|PaymentProcessedEvent| Catalog
+    RMQ -->|PaymentProcessedEvent| Notifications
+
+    Payments -->|invoca síncrono| LPay
+    LPay -->|PaymentProcessedEvent| RMQ
+
+    Notifications -->|invoca fire-and-forget| LNotif
+
+    Users --- SQL
+    Catalog --- SQL
 ```
 
 ---

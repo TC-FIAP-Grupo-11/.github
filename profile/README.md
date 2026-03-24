@@ -32,6 +32,7 @@ flowchart TD
     Catalog -->|OrderPlacedEvent| RMQ
 
     RMQ -->|OrderPlacedEvent| Payments
+    RMQ -->|UserCreatedEvent| Notifications
 
     Payments -->|invoca| LPay
     LPay -->|resultado| Payments
@@ -39,6 +40,8 @@ flowchart TD
     Payments -->|invoca| LNotif
 
     RMQ -->|PaymentProcessedEvent| Catalog
+
+    Notifications -->|invoca| LNotif
 
     Users --- SQL
     Catalog --- SQL
@@ -58,6 +61,10 @@ Cliente
   ├─► POST /users/api/users/confirm   → FCG.Api.Users
   │                                        │
   │                                        └─► publica UserCreatedEvent → RabbitMQ
+  │                                                  │
+  │                                                  └─► FCG.Api.Notifications
+  │                                                            └─► invoca FCG.Lambda.Notification
+  │                                                                  └─► loga e-mail de boas-vindas
   │
   └─► POST /users/api/auth/login      → FCG.Api.Users → AWS Cognito → retorna JWT
 ```
@@ -92,13 +99,14 @@ Cliente (com JWT)
 
 | Evento                  | Publicado por        | Consumido por           |
 |-------------------------|----------------------|-------------------------|
-| `UserCreatedEvent`      | FCG.Api.Users        | —                       |
-| `OrderPlacedEvent`      | FCG.Api.Catalog      | FCG.Api.Payments        |
-| `PaymentProcessedEvent` | FCG.Api.Payments     | FCG.Api.Catalog         |
+| `UserCreatedEvent`      | FCG.Api.Users        | FCG.Api.Notifications                   |
+| `OrderPlacedEvent`      | FCG.Api.Catalog      | FCG.Api.Payments                        |
+| `PaymentProcessedEvent` | FCG.Api.Payments     | FCG.Api.Catalog                         |
 
 ### Invocações de Lambda
 
-| Chamador              | Lambda invocada          |
-|-----------------------|--------------------------|
-| FCG.Api.Payments      | FCG.Lambda.Payment       |
-| FCG.Api.Payments      | FCG.Lambda.Notification  |
+| Chamador                | Lambda invocada          |
+|-------------------------|--------------------------|
+| FCG.Api.Payments        | FCG.Lambda.Payment       |
+| FCG.Api.Payments        | FCG.Lambda.Notification  |
+| FCG.Api.Notifications   | FCG.Lambda.Notification  |
